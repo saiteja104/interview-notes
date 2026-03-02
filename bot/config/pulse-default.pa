@@ -1,0 +1,9 @@
+#!/usr/bin/pulseaudio -nF
+
+load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse/native
+load-module module-always-sink
+load-module module-null-sink sink_name=virtual_speaker sink_properties=device.description="VirtualSpeaker"
+load-module module-virtual-source source_name=virtual_mic master=virtual_speaker.monitor source_properties=device.description="VirtualMic"
+
+set-default-sink   virtual_speaker
+set-default-source virtual_mic
