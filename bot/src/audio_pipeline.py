@@ -16,6 +16,7 @@ DEEPGRAM_URL = (
     "&interim_results=true"
     "&endpointing=300"
     "&smart_format=true"
+    "&keepalive=true"
 )
 
 
@@ -85,10 +86,44 @@ class AudioPipeline:
         except Exception:
             pass
 
+    # async def _receive_transcripts(self, ws):
+    #     async for raw in ws:
+    #         try:
+    #             msg = json.loads(raw)
+    #             if msg.get("type") != "Results":
+    #                 continue
+
+    #             alt        = msg["channel"]["alternatives"][0]
+    #             transcript = alt.get("transcript", "").strip()
+    #             is_final   = msg.get("is_final", False)
+    #             words      = alt.get("words", [])
+
+    #             if not transcript:
+    #                 continue
+
+    #             speaker_id = words[0].get("speaker") if words else None
+    #             log.info(f"[{'FINAL' if is_final else 'interim'}] Speaker {speaker_id}: {transcript}")
+
+    #             await self.api.send_transcript(
+    #                 text=transcript,
+    #                 speaker_id=speaker_id,
+    #                 words=words,
+    #                 is_final=is_final,
+    #             )
+    #         except Exception as e:
+    #             log.error(f"Transcript error: {e}")
+
+
     async def _receive_transcripts(self, ws):
         async for raw in ws:
             try:
                 msg = json.loads(raw)
+                
+                # Catch and print ANY Deepgram errors immediately
+                if msg.get("type") == "Error" or "error" in msg:
+                    log.error(f"DEEPGRAM ERROR: {msg}")
+                    continue
+
                 if msg.get("type") != "Results":
                     continue
 

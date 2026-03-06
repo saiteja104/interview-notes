@@ -1,9 +1,9 @@
 @echo off
-set MEETING_URL=https://us04web.zoom.us/j/73850955863?pwd=BZaZ6ZtrUMEVqRpubNF87tSGKIRBR2.1
-set INTERVIEW_ID=test-001
-set BOT_NAME=Interview Assistant
-set API_BASE_URL=http://host.docker.internal:8000
-set DEEPGRAM_API_KEY=4b46ec0127fca32c0097a2ac3d1263c88b7d6dc7
+set "MEETING_URL=https://app.zoom.us/wc/5092477875/start?fromPWA=1&pwd=5R7zz40O3C9x4KKjIXFRYFDcoLuvKm.1"
+set "INTERVIEW_ID=test-001"
+set "BOT_NAME=Interview Assistant"
+set "API_BASE_URL=http://172.27.160.1:8000"
+set "DEEPGRAM_API_KEY=4b46ec0127fca32c0097a2ac3d1263c88b7d6dc7"
 
 docker rm -f zoom-bot-test 2>nul
 
@@ -14,6 +14,7 @@ docker run ^
     -e BOT_NAME="%BOT_NAME%" ^
     -e API_BASE_URL="%API_BASE_URL%" ^
     -e DEEPGRAM_API_KEY="%DEEPGRAM_API_KEY%" ^
+    -v "%cd%\screenshots:/app/screenshots" ^
     --cap-add=SYS_ADMIN ^
     --security-opt seccomp=unconfined ^
     --memory="2g" ^

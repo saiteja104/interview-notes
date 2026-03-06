@@ -33,6 +33,9 @@ class ZoomJoiner:
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--use-fake-ui-for-media-stream",
+                "--use-fake-device-for-media-stream",
+                "--autoplay-policy=no-user-gesture-required",
+                "--disable-features=AudioServiceOutOfProcess", # <--- ADD THIS FLAG
                 "--alsa-output-device=pulse",
                 "--alsa-input-device=pulse",
                 "--disable-blink-features=AutomationControlled",
@@ -78,7 +81,7 @@ class ZoomJoiner:
         await self._page.goto(web_url, wait_until="domcontentloaded", timeout=60000)
         await self._screenshot("01_loaded")
 
-        # Wait for name input — no hardcoded sleep, just wait up to 40s
+        # Wait for name input
         log.info("Waiting for name input...")
         try:
             name_input = await self._page.wait_for_selector(
@@ -97,7 +100,6 @@ class ZoomJoiner:
         await self._screenshot("02_name_entered")
 
         # Join button becomes enabled AFTER name is typed
-        # Give it a moment then click
         await asyncio.sleep(1)
         log.info("Waiting for Join button to be enabled...")
         try:
@@ -114,21 +116,43 @@ class ZoomJoiner:
 
         await self._screenshot("03_join_clicked")
 
-        # Handle audio dialog
-        await asyncio.sleep(2)
-        try:
-            audio_btn = await self._page.wait_for_selector(
-                'button:has-text("Join Audio"), '
-                'button:has-text("Join with Computer Audio")',
-                timeout=6000
-            )
-            await audio_btn.click()
-            log.info("Joined audio")
-        except Exception:
-            log.info("No audio dialog — skipping")
-
+        # 1. Wait to be admitted FIRST
         await self._handle_waiting_room()
 
+        # WAKE UP THE AUDIO: Click randomly on the screen to unlock Chrome's Web Audio API
+        log.info("Clicking the screen to unlock Zoom audio...")
+        await self._page.mouse.click(200, 200)
+
+        # 2. Handle audio dialog AFTER entering meeting
+        await asyncio.sleep(5)
+        log.info("Checking audio connection status...")
+        try:
+            # Check 1: Is it already connected? (Looks for Mute/Unmute)
+            connected = await self._page.query_selector('button:has-text("Unmute"), button:has-text("Mute")')
+            if connected:
+                log.info("Audio is already connected!")
+            else:
+                # Check 2: Click the bottom-left toolbar icon first if the modal isn't open
+                toolbar_audio = await self._page.query_selector('button[aria-label^="Join Audio"]')
+                if toolbar_audio:
+                    log.info("Clicking toolbar Join Audio icon...")
+                    await toolbar_audio.click()
+                    await asyncio.sleep(1)
+
+                # Check 3: Click the big blue button in the modal
+                log.info("Looking for the Join Audio popup...")
+                audio_btn = await self._page.wait_for_selector(
+                    '.join-audio-by-voip__join-btn, button:has-text("Join Audio by Computer"), button:has-text("Computer Audio")',
+                    timeout=10000
+                )
+                await audio_btn.click()
+                log.info("Clicked Join Audio successfully")
+                await self._screenshot("05_audio_success")
+                
+        except Exception as e:
+            log.warning(f"Audio dialog fail: {e}")
+            await self._screenshot("05_audio_failed")
+            
     async def _handle_waiting_room(self):
         log.info("Waiting to be admitted...")
         await self.api.update_status("waiting_room")
@@ -203,10 +227,10 @@ class ZoomJoiner:
         """
         Handles all Zoom URL formats:
         zoom.us/j/123?pwd=xxx
-        us05web.zoom.us/j/123?pwd=xxx
+        app.zoom.us/wc/123/start
         → zoom.us/wc/join/123?pwd=xxx
         """
-        match = re.search(r'/j/(\d+)', meeting_url)
+        match = re.search(r'/(?:j|wc)/(\d+)', meeting_url)
         if not match:
             raise ValueError(f"Cannot extract meeting ID from: {meeting_url}")
 
@@ -214,14 +238,20 @@ class ZoomJoiner:
         pwd_match  = re.search(r'pwd=([^&]+)', meeting_url)
         pwd_param  = f"?pwd={pwd_match.group(1)}" if pwd_match else ""
 
-        # Always use main zoom.us domain for web client
         return f"https://zoom.us/wc/join/{meeting_id}{pwd_param}"
 
     async def _screenshot(self, name: str):
-        try:
-            await self._page.screenshot(path=f"/tmp/bot_{name}.png")
-        except Exception:
-            pass
+            try:
+                # Give it 8 seconds to render the heavy Zoom UI, and disable animations
+                await self._page.screenshot(
+                    path=f"/app/screenshots/bot_{name}.png", 
+                    timeout=8000,
+                    animations="disabled"
+                )
+                log.info(f"Successfully saved screenshot: {name}")
+            except Exception as e:
+                # Now it will explicitly tell us if/why a picture failed
+                log.warning(f"Screenshot {name} failed: {e}")
 
     async def close(self):
         if self._browser:
