@@ -1,0 +1,19 @@
+C:\Users\Lenovo\interview-notes\venv
+
+C:\Users\Lenovo\interview-notes\bot_01_loaded.png
+C:\Users\Lenovo\interview-notes\bot_01b_after_wait.png
+C:\Users\Lenovo\interview-notes\debug_final.png
+
+
+# Ignore virtual environments
+venv/
+
+# Ignore Docker mapped folders and Chromium temp files
+scripts/screenshots/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore local transcript logs
+*_transcript.txt
