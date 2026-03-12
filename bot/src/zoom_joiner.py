@@ -35,7 +35,7 @@ class ZoomJoiner:
                 "--use-fake-ui-for-media-stream",
                 "--use-fake-device-for-media-stream",
                 "--autoplay-policy=no-user-gesture-required",
-                "--disable-features=AudioServiceOutOfProcess", # <--- ADD THIS FLAG
+                "--disable-features=AudioServiceOutOfProcess", 
                 "--alsa-output-device=pulse",
                 "--alsa-input-device=pulse",
                 "--disable-blink-features=AutomationControlled",
@@ -98,6 +98,20 @@ class ZoomJoiner:
             return
 
         await self._screenshot("02_name_entered")
+
+        try:
+            log.info("Turning off microphone and camera...")
+            # Find and click the microphone toggle
+            mic_btn = self._page.locator('button[aria-label*="microphone" i], button[aria-label*="mute" i]')
+            if await mic_btn.count() > 0:
+                await mic_btn.first.click()
+            
+            # Find and click the camera toggle
+            cam_btn = self._page.locator('button[aria-label*="camera" i], button[aria-label*="video" i]')
+            if await cam_btn.count() > 0:
+                await cam_btn.first.click()
+        except Exception as e:
+            log.warning(f"Could not toggle mic/cam: {e}")
 
         # Join button becomes enabled AFTER name is typed
         await asyncio.sleep(1)

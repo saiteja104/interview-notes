@@ -17,6 +17,9 @@ DEEPGRAM_URL = (
     "&endpointing=300"
     "&smart_format=true"
     "&keepalive=true"
+    "&encoding=linear16"  
+    "&sample_rate=16000"  
+    "&channels=1"         
 )
 
 
@@ -27,31 +30,64 @@ class AudioPipeline:
         self.api              = api
         self._ffmpeg_proc     = None
 
+    # async def run(self, stop_event: asyncio.Event):
+    #     log.info("Starting audio pipeline...")
+    #     await asyncio.sleep(3)
+
+    #     try:
+    #         async with websockets.connect(
+    #             DEEPGRAM_URL,
+    #             extra_headers={"Authorization": f"Token {self.deepgram_api_key}"},
+    #             ping_interval=None,
+    #             ping_timeout=None,
+    #         ) as ws:
+    #             log.info("Connected to Deepgram")
+    #             self._ffmpeg_proc = self._start_ffmpeg()
+    #             log.info("FFmpeg capturing audio")
+
+    #             await asyncio.gather(
+    #                 self._send_audio(ws, stop_event),
+    #                 self._receive_transcripts(ws),
+    #                 self._keepalive(ws, stop_event),
+    #                 self._watch_stop(ws, stop_event),
+    #             )
+    #     except Exception as e:
+    #         log.error(f"Audio pipeline error: {e}", exc_info=True)
+    #     finally:
+    #         self._kill_ffmpeg()
     async def run(self, stop_event: asyncio.Event):
         log.info("Starting audio pipeline...")
         await asyncio.sleep(3)
 
-        try:
-            async with websockets.connect(
-                DEEPGRAM_URL,
-                extra_headers={"Authorization": f"Token {self.deepgram_api_key}"},
-                ping_interval=20,
-                ping_timeout=10,
-            ) as ws:
-                log.info("Connected to Deepgram")
-                self._ffmpeg_proc = self._start_ffmpeg()
-                log.info("FFmpeg capturing audio")
+        # Loop to automatically reconnect if Deepgram hangs up
+        while not stop_event.is_set():
+            try:
+                async with websockets.connect(
+                    DEEPGRAM_URL,
+                    extra_headers={"Authorization": f"Token {self.deepgram_api_key}"},
+                    ping_interval=None,
+                ) as ws:
+                    log.info("Connected to Deepgram")
+                    self._ffmpeg_proc = self._start_ffmpeg()
+                    log.info("FFmpeg capturing audio")
 
-                await asyncio.gather(
-                    self._send_audio(ws, stop_event),
-                    self._receive_transcripts(ws),
-                    self._keepalive(ws, stop_event),
-                    self._watch_stop(ws, stop_event),
-                )
-        except Exception as e:
-            log.error(f"Audio pipeline error: {e}", exc_info=True)
-        finally:
-            self._kill_ffmpeg()
+                    # Run all websocket tasks concurrently
+                    await asyncio.gather(
+                        self._send_audio(ws, stop_event),
+                        self._receive_transcripts(ws),
+                        self._keepalive(ws, stop_event),
+                        self._watch_stop(ws, stop_event),
+                    )
+            except Exception as e:
+                if stop_event.is_set():
+                    break
+                log.warning(f"Deepgram dropped connection. Auto-reconnecting... ({e})")
+            finally:
+                self._kill_ffmpeg()
+
+            # Wait 2 seconds before redialing Deepgram to avoid spamming
+            if not stop_event.is_set():
+                await asyncio.sleep(2)
 
     def _start_ffmpeg(self):
         return subprocess.Popen(

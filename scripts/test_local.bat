@@ -1,5 +1,5 @@
 @echo off
-set "MEETING_URL=https://app.zoom.us/wc/5092477875/start?fromPWA=1&pwd=5R7zz40O3C9x4KKjIXFRYFDcoLuvKm.1"
+set "MEETING_URL=https://us05web.zoom.us/j/84447900892?pwd=kINQtwGNKwOs9GE9QqmCvRONqRPI0Y.1"
 set "INTERVIEW_ID=test-001"
 set "BOT_NAME=Interview Assistant"
 set "API_BASE_URL=http://172.27.160.1:8000"
