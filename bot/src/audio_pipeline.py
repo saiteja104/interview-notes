@@ -1,93 +1,83 @@
 import asyncio
-import json
 import logging
 import subprocess
-
-import websockets
+import os
+import azure.cognitiveservices.speech as speechsdk
 
 log = logging.getLogger("audio_pipeline")
 
-DEEPGRAM_URL = (
-    "wss://api.deepgram.com/v1/listen"
-    "?model=nova-2"
-    "&language=en"
-    "&punctuate=true"
-    "&diarize=true"
-    "&interim_results=true"
-    "&endpointing=300"
-    "&smart_format=true"
-    "&keepalive=true"
-    "&encoding=linear16"  
-    "&sample_rate=16000"  
-    "&channels=1"         
-)
-
-
 class AudioPipeline:
-    def __init__(self, deepgram_api_key: str, interview_id: str, api):
-        self.deepgram_api_key = deepgram_api_key
-        self.interview_id     = interview_id
-        self.api              = api
-        self._ffmpeg_proc     = None
+    def __init__(self, unused_key: str, interview_id: str, api):
+        # We ignore the old Deepgram key passed by bot.py and grab Azure directly
+        self.azure_key = os.getenv("AZURE_SPEECH_KEY")
+        self.azure_region = os.getenv("AZURE_SPEECH_REGION")
+        self.interview_id = interview_id
+        self.api = api
+        
+        self._ffmpeg_proc = None
+        self._push_stream = None
+        self._recognizer = None
 
-    # async def run(self, stop_event: asyncio.Event):
-    #     log.info("Starting audio pipeline...")
-    #     await asyncio.sleep(3)
-
-    #     try:
-    #         async with websockets.connect(
-    #             DEEPGRAM_URL,
-    #             extra_headers={"Authorization": f"Token {self.deepgram_api_key}"},
-    #             ping_interval=None,
-    #             ping_timeout=None,
-    #         ) as ws:
-    #             log.info("Connected to Deepgram")
-    #             self._ffmpeg_proc = self._start_ffmpeg()
-    #             log.info("FFmpeg capturing audio")
-
-    #             await asyncio.gather(
-    #                 self._send_audio(ws, stop_event),
-    #                 self._receive_transcripts(ws),
-    #                 self._keepalive(ws, stop_event),
-    #                 self._watch_stop(ws, stop_event),
-    #             )
-    #     except Exception as e:
-    #         log.error(f"Audio pipeline error: {e}", exc_info=True)
-    #     finally:
-    #         self._kill_ffmpeg()
     async def run(self, stop_event: asyncio.Event):
-        log.info("Starting audio pipeline...")
+        log.info("Starting Azure audio pipeline...")
         await asyncio.sleep(3)
 
-        # Loop to automatically reconnect if Deepgram hangs up
-        while not stop_event.is_set():
-            try:
-                async with websockets.connect(
-                    DEEPGRAM_URL,
-                    extra_headers={"Authorization": f"Token {self.deepgram_api_key}"},
-                    ping_interval=None,
-                ) as ws:
-                    log.info("Connected to Deepgram")
-                    self._ffmpeg_proc = self._start_ffmpeg()
-                    log.info("FFmpeg capturing audio")
+        loop = asyncio.get_event_loop()
 
-                    # Run all websocket tasks concurrently
-                    await asyncio.gather(
-                        self._send_audio(ws, stop_event),
-                        self._receive_transcripts(ws),
-                        self._keepalive(ws, stop_event),
-                        self._watch_stop(ws, stop_event),
+        # 1. Configure Azure Speech (Creating a Client Basically.)
+        speech_config = speechsdk.SpeechConfig(subscription=self.azure_key, region=self.azure_region)
+        speech_config.speech_recognition_language = "en-US"
+        
+        # 2. Configure the Audio Push Stream (16kHz, 16-bit, Mono)
+        stream_format = speechsdk.audio.AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
+        self._push_stream = speechsdk.audio.PushAudioInputStream(stream_format=stream_format)
+        audio_config = speechsdk.audio.AudioConfig(stream=self._push_stream)
+
+        # 3. Initialize Recognizer
+        self._recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+
+        # 4. Define Azure Background Callbacks
+        def recognizing_cb(evt):
+            text = evt.result.text
+            if text:
+                log.info(f"[interim] Azure: {text}")
+                # Safely send back to the main async event loop
+                # asyncio.run_coroutine_threadsafe(
+                #     self.api.send_transcript(text=text, speaker_id="0", words=[], is_final=False),
+                #     loop
+                # )
+
+        def recognized_cb(evt):
+            if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                text = evt.result.text
+                if text:
+                    log.info(f"[FINAL] Azure: {text}")
+                    asyncio.run_coroutine_threadsafe(
+                        self.api.send_transcript(text=text, speaker_name="0", words=[], is_final=True),
+                        loop
                     )
-            except Exception as e:
-                if stop_event.is_set():
-                    break
-                log.warning(f"Deepgram dropped connection. Auto-reconnecting... ({e})")
-            finally:
-                self._kill_ffmpeg()
 
-            # Wait 2 seconds before redialing Deepgram to avoid spamming
-            if not stop_event.is_set():
-                await asyncio.sleep(2)
+        # 5. Connect events and start listening
+        self._recognizer.recognizing.connect(recognizing_cb)
+        self._recognizer.recognized.connect(recognized_cb)
+        self._recognizer.start_continuous_recognition()
+        log.info("Azure connected and actively listening")
+
+        # 6. Start FFmpeg
+        self._ffmpeg_proc = self._start_ffmpeg()
+        log.info("FFmpeg capturing audio")
+
+        try:
+            # Run the audio pushing loop alongside a stop watcher
+            await asyncio.gather(
+                self._push_audio(stop_event),
+                self._watch_stop(stop_event)
+            )
+        except Exception as e:
+            log.error(f"Audio pipeline error: {e}")
+        finally:
+            self._recognizer.stop_continuous_recognition()
+            self._kill_ffmpeg()
 
     def _start_ffmpeg(self):
         return subprocess.Popen(
@@ -104,99 +94,22 @@ class AudioPipeline:
             stderr=subprocess.DEVNULL,
         )
 
-    async def _send_audio(self, ws, stop_event: asyncio.Event):
+    async def _push_audio(self, stop_event: asyncio.Event):
         loop = asyncio.get_event_loop()
         while not stop_event.is_set():
-            chunk = await loop.run_in_executor(
-                None, self._ffmpeg_proc.stdout.read, 4096
-            )
+            # Read a chunk of bytes from FFmpeg
+            chunk = await loop.run_in_executor(None, self._ffmpeg_proc.stdout.read, 4096)
             if not chunk:
                 break
-            try:
-                await ws.send(chunk)
-            except websockets.ConnectionClosed:
-                break
+            
+            # Push the raw bytes directly into Azure's brain
+            if self._push_stream:
+                self._push_stream.write(chunk)
 
-        try:
-            await ws.send(json.dumps({"type": "CloseStream"}))
-        except Exception:
-            pass
-
-    # async def _receive_transcripts(self, ws):
-    #     async for raw in ws:
-    #         try:
-    #             msg = json.loads(raw)
-    #             if msg.get("type") != "Results":
-    #                 continue
-
-    #             alt        = msg["channel"]["alternatives"][0]
-    #             transcript = alt.get("transcript", "").strip()
-    #             is_final   = msg.get("is_final", False)
-    #             words      = alt.get("words", [])
-
-    #             if not transcript:
-    #                 continue
-
-    #             speaker_id = words[0].get("speaker") if words else None
-    #             log.info(f"[{'FINAL' if is_final else 'interim'}] Speaker {speaker_id}: {transcript}")
-
-    #             await self.api.send_transcript(
-    #                 text=transcript,
-    #                 speaker_id=speaker_id,
-    #                 words=words,
-    #                 is_final=is_final,
-    #             )
-    #         except Exception as e:
-    #             log.error(f"Transcript error: {e}")
-
-
-    async def _receive_transcripts(self, ws):
-        async for raw in ws:
-            try:
-                msg = json.loads(raw)
-                
-                # Catch and print ANY Deepgram errors immediately
-                if msg.get("type") == "Error" or "error" in msg:
-                    log.error(f"DEEPGRAM ERROR: {msg}")
-                    continue
-
-                if msg.get("type") != "Results":
-                    continue
-
-                alt        = msg["channel"]["alternatives"][0]
-                transcript = alt.get("transcript", "").strip()
-                is_final   = msg.get("is_final", False)
-                words      = alt.get("words", [])
-
-                if not transcript:
-                    continue
-
-                speaker_id = words[0].get("speaker") if words else None
-                log.info(f"[{'FINAL' if is_final else 'interim'}] Speaker {speaker_id}: {transcript}")
-
-                await self.api.send_transcript(
-                    text=transcript,
-                    speaker_id=speaker_id,
-                    words=words,
-                    is_final=is_final,
-                )
-            except Exception as e:
-                log.error(f"Transcript error: {e}")
-
-    async def _keepalive(self, ws, stop_event: asyncio.Event):
-        while not stop_event.is_set():
-            await asyncio.sleep(8)
-            try:
-                await ws.send(json.dumps({"type": "KeepAlive"}))
-            except Exception:
-                break
-
-    async def _watch_stop(self, ws, stop_event: asyncio.Event):
+    async def _watch_stop(self, stop_event: asyncio.Event):
         await stop_event.wait()
-        try:
-            await ws.close()
-        except Exception:
-            pass
+        if self._push_stream:
+            self._push_stream.close()
 
     def _kill_ffmpeg(self):
         if self._ffmpeg_proc:

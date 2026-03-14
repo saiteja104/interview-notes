@@ -22,10 +22,10 @@ class ApiClient:
         await self._post(self._status_url, payload)
         log.info(f"Status → {status}")
 
-    async def send_transcript(self, text, speaker_id, words, is_final):
+    async def send_transcript(self, text, speaker_name, words, is_final):
         await self._post(self._transcript_url, {
             "text": text,
-            "speaker_id": speaker_id,
+            "speaker_name": speaker_name,
             "words": words,
             "is_final": is_final,
             "timestamp": datetime.now(timezone.utc).isoformat(),

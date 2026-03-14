@@ -19,16 +19,17 @@ MEETING_URL      = os.environ["MEETING_URL"]
 INTERVIEW_ID     = os.environ["INTERVIEW_ID"]
 BOT_NAME         = os.environ.get("BOT_NAME", "Interview Assistant")
 API_BASE_URL     = os.environ["API_BASE_URL"]
-DEEPGRAM_API_KEY = os.environ["DEEPGRAM_API_KEY"]
-
+# Notice we completely removed the DEEPGRAM_API_KEY line here!
 
 async def main():
     log.info(f"Bot starting | interview={INTERVIEW_ID} | meeting={MEETING_URL}")
 
     api    = ApiClient(base_url=API_BASE_URL, interview_id=INTERVIEW_ID)
     joiner = ZoomJoiner(bot_name=BOT_NAME, api=api)
+    
+    # We pass a dummy string for the unused_key since Azure grabs its own keys
     audio  = AudioPipeline(
-        deepgram_api_key=DEEPGRAM_API_KEY,
+        unused_key="azure_is_handling_this",
         interview_id=INTERVIEW_ID,
         api=api,
     )
